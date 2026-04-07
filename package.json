@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "deploy:stage": "wrangler deploy --env stage"
   },
   "devDependencies": {
     "wrangler": "^3.0.0"

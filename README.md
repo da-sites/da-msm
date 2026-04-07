@@ -103,6 +103,27 @@ mountpoints:
   /: https://da-msm.worker.dev/acme/dev?base=/acme/prod
 ```
 
+## Environments
+
+The worker supports multiple environments via Wrangler, each targeting a different DA content origin.
+
+| Environment | Content Origin | Worker Name |
+|---|---|---|
+| Production (default) | `content.da.live` | `da-msm` |
+| Stage | `stage-content.da.live` | `da-msm-stage` |
+
+Configuration in `wrangler.toml`:
+
+```toml
+[vars]
+CONTENT_ORIGIN = "https://content.da.live"
+
+[env.stage.vars]
+CONTENT_ORIGIN = "https://stage-content.da.live"
+```
+
+Each environment deploys as a separate worker with its own `workers.dev` endpoint, so your site's `fstab.yaml` can point to the appropriate one.
+
 ## Development
 
 ### Local Development
@@ -121,6 +142,13 @@ curl "http://localhost:8787/acme/us-site/content/test?base=/acme/global"
 ### Deployment
 
 ```bash
-# Deploy to Cloudflare Workers
+# Deploy production worker
 npm run deploy
+
+# Deploy stage worker
+npm run deploy:stage
 ```
+
+After deployment, the endpoints will be:
+- **Production**: `https://da-msm.your-domain.workers.dev`
+- **Stage**: `https://da-msm-stage.your-domain.workers.dev`
