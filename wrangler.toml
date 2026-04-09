@@ -4,6 +4,8 @@ compatibility_date = "2024-01-01"
 
 [vars]
 CONTENT_ORIGIN = "https://content.da.live"
+ADMIN_ORIGIN = "https://admin.da.live"
 
 [env.stage.vars]
 CONTENT_ORIGIN = "https://stage-content.da.live"
+ADMIN_ORIGIN = "https://stage-admin.da.live"

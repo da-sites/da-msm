@@ -1,20 +1,39 @@
+const CONFIG_TTL = 5 * 60 * 1000;
+const configCache = new Map();
+
+async function getMsmBase(org, site, headers, env) {
+  const cached = configCache.get(org);
+  if (cached && Date.now() - cached.ts < CONFIG_TTL) {
+    return cached.mapping.get(site) || null;
+  }
+
+  const configUrl = `${env.ADMIN_ORIGIN}/config/${org}/`;
+  const resp = await fetch(configUrl, { headers });
+  if (!resp.ok) return null;
+
+  const config = await resp.json();
+  const msmData = config?.msm?.data;
+  const mapping = new Map();
+  if (msmData) {
+    for (const row of msmData) {
+      if (row.satellite) mapping.set(row.satellite, row.base);
+    }
+  }
+  configCache.set(org, { mapping, ts: Date.now() });
+
+  return mapping.get(site) || null;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-
-    // Extract base from query param (support both 'base' and 'fallback' for backwards compatibility)
-    const base = url.searchParams.get('base') || url.searchParams.get('fallback');
-
-    // Remove base params from the URL we'll proxy
-    url.searchParams.delete('base');
-    url.searchParams.delete('fallback');
     const search = url.searchParams.toString();
     const queryString = search ? `?${search}` : '';
 
     // Parse path: /org/site/rest/of/path
     const pathParts = url.pathname.split('/').filter(Boolean);
-    const satelliteOrg = pathParts[0];
-    const satelliteSite = pathParts[1];
+    const org = pathParts[0];
+    const site = pathParts[1];
     const restOfPath = '/' + pathParts.slice(2).join('/');
 
     // Clone body for potential base fallback use
@@ -26,8 +45,7 @@ export default {
       headers.set(key, value);
     }
 
-    // Try satellite site
-    const satellitePath = `/${satelliteOrg}/${satelliteSite}${restOfPath}${queryString}`;
+    const satellitePath = `/${org}/${site}${restOfPath}${queryString}`;
     const satelliteUrl = env.CONTENT_ORIGIN + satellitePath;
     const satelliteResponse = await fetch(satelliteUrl, {
       method: request.method,
@@ -36,16 +54,17 @@ export default {
       redirect: 'manual',
     });
 
-    // If satellite returns 404 and we have a base, try it
-    if (satelliteResponse.status === 404 && base) {
-      const basePath = base.replace(/\/$/, '');
-      const baseUrl = `${env.CONTENT_ORIGIN}${basePath}${restOfPath}${queryString}`;
-      return fetch(baseUrl, {
-        method: request.method,
-        headers,
-        body,
-        redirect: 'manual',
-      });
+    if (satelliteResponse.status === 404) {
+      const base = await getMsmBase(org, site, headers, env);
+      if (base) {
+        const baseUrl = `${env.CONTENT_ORIGIN}/${org}/${base}${restOfPath}${queryString}`;
+        return fetch(baseUrl, {
+          method: request.method,
+          headers,
+          body,
+          redirect: 'manual',
+        });
+      }
     }
 
     return satelliteResponse;
