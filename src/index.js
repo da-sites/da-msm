@@ -1,5 +1,6 @@
 const CONFIG_TTL = 5 * 60 * 1000;
 const configCache = new Map();
+const MERGE_PATH_RE = /^\/(redirects)(\.json)?$/;
 
 async function getMsmBase(org, site, headers, env) {
   const cached = configCache.get(org);
@@ -24,6 +25,35 @@ async function getMsmBase(org, site, headers, env) {
   return mapping.get(site) || null;
 }
 
+async function fetchJson(url, opts) {
+  const resp = await fetch(url, opts);
+  if (!resp.ok) return null;
+  try {
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+function mergeRows(baseRows, satelliteRows) {
+  if (!baseRows?.length) return satelliteRows || [];
+  if (!satelliteRows?.length) return baseRows || [];
+
+  const keyProp = Object.keys(baseRows[0])[0];
+  const merged = new Map();
+  for (const row of baseRows) merged.set(row[keyProp], row);
+  for (const row of satelliteRows) merged.set(row[keyProp], row);
+  return [...merged.values()];
+}
+
+function mergeSheetJson(baseJson, satelliteJson) {
+  if (!baseJson) return satelliteJson;
+  if (!satelliteJson) return baseJson;
+
+  const data = mergeRows(baseJson.data, satelliteJson.data);
+  return { ...baseJson, total: data.length, limit: data.length, offset: 0, data };
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -45,25 +75,36 @@ export default {
       headers.set(key, value);
     }
 
-    const satellitePath = `/${org}/${site}${restOfPath}${queryString}`;
-    const satelliteUrl = env.CONTENT_ORIGIN + satellitePath;
-    const satelliteResponse = await fetch(satelliteUrl, {
-      method: request.method,
-      headers,
-      body,
-      redirect: 'manual',
-    });
+    const fetchOpts = { method: request.method, headers, body, redirect: 'manual' };
+
+    if (MERGE_PATH_RE.test(restOfPath)) {
+      const base = await getMsmBase(org, site, headers, env);
+      if (base) {
+        const satelliteUrl = `${env.CONTENT_ORIGIN}/${org}/${site}${restOfPath}${queryString}`;
+        const baseUrl = `${env.CONTENT_ORIGIN}/${org}/${base}${restOfPath}${queryString}`;
+
+        const [satelliteJson, baseJson] = await Promise.all([
+          fetchJson(satelliteUrl, fetchOpts),
+          fetchJson(baseUrl, fetchOpts),
+        ]);
+
+        const merged = mergeSheetJson(baseJson, satelliteJson);
+        if (merged) {
+          return new Response(JSON.stringify(merged), {
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+      }
+    }
+
+    const satelliteUrl = `${env.CONTENT_ORIGIN}/${org}/${site}${restOfPath}${queryString}`;
+    const satelliteResponse = await fetch(satelliteUrl, fetchOpts);
 
     if (satelliteResponse.status === 404) {
       const base = await getMsmBase(org, site, headers, env);
       if (base) {
         const baseUrl = `${env.CONTENT_ORIGIN}/${org}/${base}${restOfPath}${queryString}`;
-        return fetch(baseUrl, {
-          method: request.method,
-          headers,
-          body,
-          redirect: 'manual',
-        });
+        return fetch(baseUrl, fetchOpts);
       }
     }
 

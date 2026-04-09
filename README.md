@@ -15,6 +15,7 @@ When content is requested from a satellite that doesn't exist or has been delete
 ### What makes MSM on Edge Delivery different?
 - **Tranparency in authoring**: Only the content that is _truly unique_ to the satellite exists in the satelite. This creates immediately clarity when browsing this content.
 - **Inherited metadata support**: Base Metadata is seamlessly stitched together with satelite Metadata. Satellite rows take precedence.
+- **Inherited redirects support**: Base redirects are seamlessly merged with satellite redirects. Satellite rows take precedence when the URL key matches.
 - **De-prioritized Localization**: Due to DA's existing and extensive localization feature-set, DA MSM is targeted at brand experience inheritance. We believe the two features are complimentary.
 
 ## What This Worker Does
@@ -25,8 +26,9 @@ This Cloudflare Worker replicates the MSM inheritance behavior for Edge Delivery
 2. **Attempting a satellite fetch** from the requested site location
 3. **Looking up the MSM config** from the DA admin API to resolve the base site
 4. **Inheriting from the base site on 404**
-5. **Preserving all request context** including headers, query parameters, and authentication
-6. **Stitching satelite metadata with base metadata**
+5. **Merging satellite redirects with base redirects** (satellite rows win on duplicate keys)
+6. **Preserving all request context** including headers, query parameters, and authentication
+7. **Stitching satelite metadata with base metadata**
 
 ### Request Flow
 
@@ -85,6 +87,42 @@ The worker fetches this config from the DA admin API and caches it in memory (5-
 3. **Satellite Content Request**: The worker requests the satellite content from DA
 4. **Content Overridden**: If the content has been overridden in the satellite, this content is sent back to Edge Delivery
 5. **Inherit from Base**: If the content has not been overridden, the worker looks up the MSM config for the satellite's base site and inherits content from there
+
+### Redirect Inheritance
+
+When a request targets a redirect resource (`/redirects` or `/redirects.json`), the worker merges satellite and base redirects rather than using 404 fallback:
+
+1. Both satellite and base redirects are fetched **in parallel**
+2. Rows are merged using the first column (the source URL) as the key
+3. Where the same key exists in both, the **satellite row wins**
+4. The merged result is returned as a single JSON response
+
+```
+┌───────────────────────────────────────────────────────────┐
+│  Base redirects (/acme/global-site/redirects)             │
+│  /old-about  →  /about                                    │
+│  /old-help   →  /help                                     │
+│  /old-legal  →  /legal                                    │
+└──────────────────────┬────────────────────────────────────┘
+                       │  merge (base first)
+                       ▼
+┌───────────────────────────────────────────────────────────┐
+│  Satellite redirects (/acme/store-1/redirects)            │
+│  /old-about  →  /store-1/about        ← overrides base   │
+│  /promo      →  /store-1/sale         ← satellite-only   │
+└──────────────────────┬────────────────────────────────────┘
+                       │  satellite wins on conflict
+                       ▼
+┌───────────────────────────────────────────────────────────┐
+│  Merged result                                            │
+│  /old-about  →  /store-1/about        (satellite)         │
+│  /old-help   →  /help                 (inherited)         │
+│  /old-legal  →  /legal                (inherited)         │
+│  /promo      →  /store-1/sale         (satellite)         │
+└───────────────────────────────────────────────────────────┘
+```
+
+If only one side has redirects (e.g., the satellite has none), the other side's data is returned as-is.
 
 ## Usage
 
