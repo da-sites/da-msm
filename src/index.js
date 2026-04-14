@@ -64,7 +64,10 @@ export default {
     const pathParts = url.pathname.split('/').filter(Boolean);
     const org = pathParts[0];
     const site = pathParts[1];
-    const restOfPath = '/' + pathParts.slice(2).join('/');
+    let restOfPath = '/' + pathParts.slice(2).join('/');
+    if (url.pathname.endsWith('/') && !restOfPath.endsWith('/')) {
+      restOfPath += '/';
+    }
 
     // Clone body for potential base fallback use
     const body = request.body ? await request.arrayBuffer() : null;
