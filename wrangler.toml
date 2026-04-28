@@ -9,3 +9,8 @@ ADMIN_ORIGIN = "https://admin.da.live"
 [env.stage.vars]
 CONTENT_ORIGIN = "https://stage-content.da.live"
 ADMIN_ORIGIN = "https://stage-admin.da.live"
+
+[observability]
+[observability.logs]
+enabled = true
+invocation_logs = true
