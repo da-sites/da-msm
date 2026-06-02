@@ -1,16 +1,18 @@
 const CONFIG_TTL = 5 * 60 * 1000;
+const MAX_INHERITANCE_DEPTH = 6;
+const RESOLVED_CACHE_TTL = 5 * 60;
 const configCache = new Map();
 const MERGE_PATH_RE = /^\/(redirects)(\.json)?$/;
 
-async function getMsmBase(org, site, headers, env) {
+async function getMsmMapping(org, headers, env) {
   const cached = configCache.get(org);
   if (cached && Date.now() - cached.ts < CONFIG_TTL) {
-    return cached.mapping.get(site) || null;
+    return cached.mapping;
   }
 
   const configUrl = `${env.ADMIN_ORIGIN}/config/${org}/`;
   const resp = await fetch(configUrl, { headers });
-  if (!resp.ok) return null;
+  if (!resp.ok) return new Map();
 
   const config = await resp.json();
   const msmData = config?.msm?.data;
@@ -22,7 +24,24 @@ async function getMsmBase(org, site, headers, env) {
   }
   configCache.set(org, { mapping, ts: Date.now() });
 
-  return mapping.get(site) || null;
+  return mapping;
+}
+
+function getAncestorChain(mapping, site) {
+  const chain = [];
+  const visited = new Set();
+  let current = site;
+
+  while (chain.length < MAX_INHERITANCE_DEPTH) {
+    const base = mapping.get(current);
+    if (!base) break;
+    if (visited.has(base)) break; // cycle detected
+    visited.add(base);
+    chain.push(base);
+    current = base;
+  }
+
+  return chain;
 }
 
 async function fetchJson(url, opts) {
@@ -54,11 +73,46 @@ function mergeSheetJson(baseJson, satelliteJson) {
   return { ...baseJson, total: data.length, limit: data.length, offset: 0, data };
 }
 
+function isCacheable(request, response) {
+  if (request.method !== 'GET') return false;
+  if (!response.ok) return false;
+  if (response.headers.has('Set-Cookie')) return false;
+  const cc = response.headers.get('Cache-Control') || '';
+  if (cc.includes('no-store') || cc.includes('private')) return false;
+  return true;
+}
+
+function withDefaultCacheControl(response) {
+  const headers = new Headers(response.headers);
+  if (!headers.has('Cache-Control')) {
+    headers.set('Cache-Control', `public, max-age=${RESOLVED_CACHE_TTL}`);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function maybeCache(ctx, cache, request, response) {
+  if (!isCacheable(request, response)) return response;
+  const cacheable = withDefaultCacheControl(response.clone());
+  ctx.waitUntil(cache.put(request, cacheable));
+  return response;
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const search = url.searchParams.toString();
     const queryString = search ? `?${search}` : '';
+
+    // colo-local response cache. Skips the entire walk on repeat hits.
+    const cache = caches.default;
+    if (request.method === 'GET') {
+      const cached = await cache.match(request);
+      if (cached) return cached;
+    }
 
     // Parse path: /org/site/rest/of/path
     const pathParts = url.pathname.split('/').filter(Boolean);
@@ -80,22 +134,32 @@ export default {
 
     const fetchOpts = { method: request.method, headers, body, redirect: 'manual' };
 
+    const mapping = await getMsmMapping(org, headers, env);
+    const ancestors = getAncestorChain(mapping, site);
+
     if (MERGE_PATH_RE.test(restOfPath)) {
-      const base = await getMsmBase(org, site, headers, env);
-      if (base) {
-        const satelliteUrl = `${env.CONTENT_ORIGIN}/${org}/${site}${restOfPath}${queryString}`;
-        const baseUrl = `${env.CONTENT_ORIGIN}/${org}/${base}${restOfPath}${queryString}`;
+      if (ancestors.length) {
+        const allSites = [site, ...ancestors];
+        const results = await Promise.all(
+          allSites.map((s) => fetchJson(
+            `${env.CONTENT_ORIGIN}/${org}/${s}${restOfPath}${queryString}`,
+            fetchOpts,
+          )),
+        );
 
-        const [satelliteJson, baseJson] = await Promise.all([
-          fetchJson(satelliteUrl, fetchOpts),
-          fetchJson(baseUrl, fetchOpts),
-        ]);
-
-        const merged = mergeSheetJson(baseJson, satelliteJson);
+        // Merge from root ancestor down so nearer overrides win
+        let merged = null;
+        for (let i = results.length - 1; i >= 0; i -= 1) {
+          merged = mergeSheetJson(merged, results[i]);
+        }
         if (merged) {
-          return new Response(JSON.stringify(merged), {
-            headers: { 'Content-Type': 'application/json' },
+          const mergedResponse = new Response(JSON.stringify(merged), {
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': `public, max-age=${RESOLVED_CACHE_TTL}`,
+            },
           });
+          return maybeCache(ctx, cache, request, mergedResponse);
         }
       }
     }
@@ -103,14 +167,28 @@ export default {
     const satelliteUrl = `${env.CONTENT_ORIGIN}/${org}/${site}${restOfPath}${queryString}`;
     const satelliteResponse = await fetch(satelliteUrl, fetchOpts);
 
-    if (satelliteResponse.status === 404) {
-      const base = await getMsmBase(org, site, headers, env);
-      if (base) {
-        const baseUrl = `${env.CONTENT_ORIGIN}/${org}/${base}${restOfPath}${queryString}`;
-        return fetch(baseUrl, fetchOpts);
-      }
+    if (satelliteResponse.status !== 404) {
+      return maybeCache(ctx, cache, request, satelliteResponse);
     }
 
-    return satelliteResponse;
+    if (!ancestors.length) return satelliteResponse;
+
+    const probeOpts = { method: 'GET', headers, redirect: 'manual' };
+    const probeResults = await Promise.all(
+      ancestors.map((ancestor) => fetch(
+        `${env.CONTENT_ORIGIN}/${org}/${ancestor}${restOfPath}${queryString}`,
+        probeOpts,
+      ).catch(() => null)),
+    );
+
+    const winnerIdx = probeResults.findIndex((r) => r && r.ok);
+
+    // Release upstream connections for losing probes
+    probeResults.forEach((r, i) => {
+      if (r && i !== winnerIdx) r.body?.cancel();
+    });
+
+    if (winnerIdx === -1) return satelliteResponse;
+    return maybeCache(ctx, cache, request, probeResults[winnerIdx]);
   },
 };
