@@ -41,7 +41,7 @@ This Cloudflare Worker replicates the MSM inheritance behavior for Edge Delivery
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │  DA MSM Worker                                          │
-│  https://da-msm.adobedev.workers.dev                    │
+│  https://da-msm.adobeaem.workers.dev                    │
 └─────────────────────┬───────────────────────────────────┘
                       │
                       ▼
@@ -69,12 +69,28 @@ All ancestors in the chain are probed **in parallel**, and the first ok response
 
 ### Example content source configuration
 
+The current recommended way to point a satellite site at this worker is to configure it as an Edge Delivery **Content Provider** (per [Adobe's MSM documentation](https://docs.da.live/about/early-access/multi-site-manager)):
+
+```json
+// /sites/{site}.json
+{
+  "content": {
+    "source": {
+      "url": "https://da-msm.your-domain.workers.dev/{org}/{site}/",
+      "type": "markup"
+    }
+  }
+}
+```
+
+Sites that still rely on `fstab.yaml` (read from `main`) can use the equivalent `mountpoints` entry instead:
+
 ```yaml
 mountpoints:
   /: https://da-msm.your-domain.workers.dev/acme/store-1
 ```
 
-This `mountpoints` entry can live in `fstab.yaml` (still read from your `main` branch), or be added as a content source via the [Configuration Service API](https://www.aem.live/docs/config-service-setup), which is now the recommended way to point a site at this worker — `fstab.yaml` is no longer required for new sites (see the [FAQ](https://www.aem.live/docs/faq#what-is-fstabyaml)).
+`fstab.yaml` is no longer required for new sites — see the [FAQ](https://www.aem.live/docs/faq#what-is-fstabyaml).
 
 ### MSM Config Setup
 
@@ -90,6 +106,8 @@ The base-to-satellite mapping is managed in the DA config UI at `da.live/config#
 - **base**: The base (blueprint) site repo name
 - **satellite**: The satellite (live copy) site repo name (empty for the base entry itself)
 - **title**: A human-readable label
+
+> **Terminology note:** [Adobe's public MSM documentation](https://docs.da.live/about/early-access/multi-site-manager) describes this same relationship using the terms **source** and **linked** instead of **base** and **satellite**, with a sheet whose columns are named `source` / `linked` / `title`. This worker's code reads the sheet using the **base** / **satellite** column names — if your org's `msm` sheet was created with `source` / `linked` headers instead, the mapping won't resolve. Make sure your sheet's columns are named `base` and `satellite`.
 
 A row's `base` can itself appear as a `satellite` in another row (as `na-region` does above), which is what forms a multi-level chain: `store-1 → na-region → global-site`. The worker walks the full chain, up to a fixed maximum depth, with cycle detection to guard against misconfigured loops.
 
