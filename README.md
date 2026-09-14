@@ -35,7 +35,7 @@ This Cloudflare Worker replicates the MSM inheritance behavior for Edge Delivery
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Edge Delivery Services Site                            │
-│  (fstab.yaml configured to use this worker)             │
+│  (content source configured to use this worker)         │
 └─────────────────────┬───────────────────────────────────┘
                       │
                       ▼
@@ -67,12 +67,14 @@ This Cloudflare Worker replicates the MSM inheritance behavior for Edge Delivery
 
 All ancestors in the chain are probed **in parallel**, and the first ok response found (nearest to the satellite) is returned. The chain is capped at a fixed maximum depth with cycle detection, so a misconfigured loop (e.g. A → B → A) can't cause infinite lookups.
 
-### Example mountpoint
+### Example content source configuration
 
 ```yaml
 mountpoints:
   /: https://da-msm.your-domain.workers.dev/acme/store-1
 ```
+
+This `mountpoints` entry can live in `fstab.yaml` (still read from your `main` branch), or be added as a content source via the [Configuration Service API](https://www.aem.live/docs/config-service-setup), which is now the recommended way to point a site at this worker — `fstab.yaml` is no longer required for new sites (see the [FAQ](https://www.aem.live/docs/faq#what-is-fstabyaml)).
 
 ### MSM Config Setup
 
@@ -209,7 +211,7 @@ CONTENT_ORIGIN = "https://stage-content.da.live"
 ADMIN_ORIGIN = "https://stage-admin.da.live"
 ```
 
-Each environment deploys as a separate worker with its own `workers.dev` endpoint, so your site's `fstab.yaml` can point to the appropriate one.
+Each environment deploys as a separate worker with its own `workers.dev` endpoint, so your site's content source configuration (`fstab.yaml` or the Configuration Service API) can point to the appropriate one.
 
 ## Development
 
