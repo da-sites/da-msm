@@ -10,13 +10,13 @@ Multi-Site Management (MSM) is a content management pattern that allows organiza
 - **Efficient Updates**: Changes to the blueprint can be rolled out to live copies
 - **Selective Overrides**: Live copies can override specific content while inheriting the rest
 
-When content is requested from a satellite that doesn't exist or has been deleted, the system inherits from the base site.
+When content is requested from a satellite that doesn't exist or has been deleted, the system inherits from its base site. A base can itself be the satellite of another base, so inheritance can chain across multiple levels (e.g. a store site inherits from a country site, which inherits from a global site).
 
 ### What makes MSM on Edge Delivery different?
-- **Tranparency in authoring**: Only the content that is _truly unique_ to the satellite exists in the satelite. This creates immediately clarity when browsing this content.
-- **Inherited metadata support**: Base Metadata is seamlessly stitched together with satelite Metadata. Satellite rows take precedence.
-- **Inherited redirects support**: Base redirects are seamlessly merged with satellite redirects. Satellite rows take precedence when the URL key matches.
-- **De-prioritized Localization**: Due to DA's existing and extensive localization feature-set, DA MSM is targeted at brand experience inheritance. We believe the two features are complimentary.
+- **Transparency in authoring**: Only the content that is _truly unique_ to the satellite exists in the satellite. This creates immediate clarity when browsing this content.
+- **Multi-level inheritance**: Satellites can chain through multiple base levels (e.g. store → country → global), with each level able to override only what's unique to it.
+- **Inherited redirects support**: Redirects from every ancestor in the chain are merged with the satellite's own redirects. Rows from a closer (more satellite-side) site take precedence over the same key from a more distant ancestor.
+- **De-prioritized Localization**: Due to DA's existing and extensive localization feature-set, DA MSM is targeted at brand experience inheritance. We believe the two features are complementary.
 
 ## What This Worker Does
 
@@ -24,11 +24,11 @@ This Cloudflare Worker replicates the MSM inheritance behavior for Edge Delivery
 
 1. **Intercepting content requests** in the format `/org/site/path`
 2. **Attempting a satellite fetch** from the requested site location
-3. **Looking up the MSM config** from the DA admin API to resolve the base site
-4. **Inheriting from the base site on 404**
-5. **Merging satellite redirects with base redirects** (satellite rows win on duplicate keys)
-6. **Preserving all request context** including headers, query parameters, and authentication
-7. **Stitching satelite metadata with base metadata**
+3. **Looking up the MSM config** from the DA admin API to resolve the full chain of ancestor (base) sites
+4. **Inheriting from the ancestor chain on 404**, walking up through each base in order until one resolves
+5. **Merging redirects across the whole ancestor chain** (closer sites win on duplicate keys)
+6. **Preserving request context** (headers, query parameters, and authentication) on the direct satellite request
+7. **Caching resolved responses at the edge** for repeat requests (see [Response Caching](#response-caching))
 
 ### Request Flow
 
@@ -46,16 +46,26 @@ This Cloudflare Worker replicates the MSM inheritance behavior for Edge Delivery
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Try Satellite: /acme/us-site/content/page              │
-│  Status: 404                                            │
+│  Try Satellite: /acme/us-store/content/page              │
+│  Status: 404                                              │
 └─────────────────────┬───────────────────────────────────┘
                       │
-                      ▼ MSM config lookup: us-site → global-site
+                      ▼ MSM config lookup resolves the ancestor chain:
+                      │   us-store → na-region → global-site
+                      ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Try Base: /acme/global-site/content/page               │
-│  Status: 200 ✓                                          │
+│  Try Ancestor 1: /acme/na-region/content/page            │
+│  Status: 404                                              │
+└─────────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│  Try Ancestor 2: /acme/global-site/content/page          │
+│  Status: 200 ✓                                            │
 └─────────────────────────────────────────────────────────┘
 ```
+
+All ancestors in the chain are probed **in parallel**, and the first ok response found (nearest to the satellite) is returned. The chain is capped at a fixed maximum depth with cycle detection, so a misconfigured loop (e.g. A → B → A) can't cause infinite lookups.
 
 ### Example mountpoint
 
@@ -71,12 +81,15 @@ The base-to-satellite mapping is managed in the DA config UI at `da.live/config#
 | base | satellite | title |
 |---|---|---|
 | global-site | | Global Site (base) |
-| global-site | store-1 | Store 1 |
-| global-site | store-2 | Store 2 |
+| global-site | na-region | North America (region) |
+| na-region | store-1 | Store 1 |
+| na-region | store-2 | Store 2 |
 
 - **base**: The base (blueprint) site repo name
 - **satellite**: The satellite (live copy) site repo name (empty for the base entry itself)
 - **title**: A human-readable label
+
+A row's `base` can itself appear as a `satellite` in another row (as `na-region` does above), which is what forms a multi-level chain: `store-1 → na-region → global-site`. The worker walks the full chain, up to a fixed maximum depth, with cycle detection to guard against misconfigured loops.
 
 The worker fetches this config from the DA admin API and caches it in memory (5-minute TTL).
 
@@ -86,43 +99,49 @@ The worker fetches this config from the DA admin API and caches it in memory (5-
 2. **Worker Request**: Edge Delivery requests the content from the MSM worker
 3. **Satellite Content Request**: The worker requests the satellite content from DA
 4. **Content Overridden**: If the content has been overridden in the satellite, this content is sent back to Edge Delivery
-5. **Inherit from Base**: If the content has not been overridden, the worker looks up the MSM config for the satellite's base site and inherits content from there
+5. **Inherit from the Ancestor Chain**: If the content has not been overridden (satellite returns 404), the worker resolves the satellite's full ancestor chain from the MSM config and probes every ancestor in parallel, returning content from the nearest ancestor that resolves
 
 ### Redirect Inheritance
 
-When a request targets a redirect resource (`/redirects` or `/redirects.json`), the worker merges satellite and base redirects rather than using 404 fallback:
+When a request targets a redirect resource (`/redirects` or `/redirects.json`), the worker merges redirects across the satellite and its entire ancestor chain rather than using 404 fallback:
 
-1. Both satellite and base redirects are fetched **in parallel**
-2. Rows are merged using the first column (the source URL) as the key
-3. Where the same key exists in both, the **satellite row wins**
+1. Redirects for the satellite and every ancestor in its chain are fetched **in parallel**
+2. Rows are merged using the first column (the source URL) as the key, starting from the most distant ancestor and applying nearer sites on top
+3. Where the same key exists at multiple levels, the row from the site **closest to the satellite wins**
 4. The merged result is returned as a single JSON response
 
 ```
 ┌───────────────────────────────────────────────────────────┐
-│  Base redirects (/acme/global-site/redirects)             │
+│  global-site redirects (/acme/global-site/redirects)      │
 │  /old-about  →  /about                                    │
 │  /old-help   →  /help                                     │
 │  /old-legal  →  /legal                                    │
 └──────────────────────┬────────────────────────────────────┘
-                       │  merge (base first)
+                       │  merge (most distant ancestor first)
                        ▼
 ┌───────────────────────────────────────────────────────────┐
-│  Satellite redirects (/acme/store-1/redirects)            │
-│  /old-about  →  /store-1/about        ← overrides base   │
-│  /promo      →  /store-1/sale         ← satellite-only   │
+│  na-region redirects (/acme/na-region/redirects)          │
+│  /old-help   →  /na/help              ← overrides global  │
+└──────────────────────┬────────────────────────────────────┘
+                       │  merge (nearer ancestor wins on conflict)
+                       ▼
+┌───────────────────────────────────────────────────────────┐
+│  store-1 redirects (/acme/store-1/redirects)              │
+│  /old-about  →  /store-1/about        ← overrides global  │
+│  /promo      →  /store-1/sale         ← satellite-only    │
 └──────────────────────┬────────────────────────────────────┘
                        │  satellite wins on conflict
                        ▼
 ┌───────────────────────────────────────────────────────────┐
 │  Merged result                                            │
 │  /old-about  →  /store-1/about        (satellite)         │
-│  /old-help   →  /help                 (inherited)         │
-│  /old-legal  →  /legal                (inherited)         │
+│  /old-help   →  /na/help              (na-region)         │
+│  /old-legal  →  /legal                (global-site)        │
 │  /promo      →  /store-1/sale         (satellite)         │
 └───────────────────────────────────────────────────────────┘
 ```
 
-If only one side has redirects (e.g., the satellite has none), the other side's data is returned as-is.
+If a site in the chain has no redirects, it's simply skipped in the merge; if none of them do, an empty result is returned.
 
 ## Usage
 
@@ -137,7 +156,7 @@ https://da-msm.your-domain.workers.dev/{org}/{site}/{path}
 - `site`: The satellite site to fetch from (e.g., "us-site")
 - `path`: The content path being requested
 
-The base site is resolved automatically from the org's MSM config.
+The ancestor chain (base, base-of-base, etc.) is resolved automatically from the org's MSM config.
 
 ## Use Cases
 
@@ -158,6 +177,16 @@ Development sites can inherit production content:
 mountpoints:
   /: https://da-msm.worker.dev/acme/dev
 ```
+
+## Response Caching
+
+In addition to the in-memory MSM config cache, the worker uses Cloudflare's colo-local Cache API (`caches.default`) to cache resolved responses for repeat `GET` requests:
+
+- On a `GET` request, the worker first checks the cache and returns a hit immediately, skipping the satellite fetch, ancestor probing, and any merging entirely.
+- A response is only cached if it's a `GET`, the upstream response was successful (`response.ok`), and the response has no `Set-Cookie` header and no `Cache-Control: no-store` or `Cache-Control: private` directive.
+- Cached (and merged-redirect) responses are stored with `Cache-Control: public, max-age=300` (5 minutes) if the upstream didn't already set its own `Cache-Control`.
+
+This means a change to content, redirects, or the MSM config itself may take up to 5 minutes to be reflected in a given Cloudflare colo, even though the in-memory MSM config cache is refreshed independently.
 
 ## Environments
 
