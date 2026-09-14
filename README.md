@@ -46,22 +46,22 @@ This Cloudflare Worker replicates the MSM inheritance behavior for Edge Delivery
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Try Satellite: /acme/us-store/content/page              │
-│  Status: 404                                              │
+│  Try Satellite: /acme/us-store/content/page             │
+│  Status: 404                                            │
 └─────────────────────┬───────────────────────────────────┘
                       │
                       ▼ MSM config lookup resolves the ancestor chain:
                       │   us-store → na-region → global-site
                       ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Try Ancestor 1: /acme/na-region/content/page            │
-│  Status: 404                                              │
+│  Try Ancestor 1: /acme/na-region/content/page           │
+│  Status: 404                                            │
 └─────────────────────┬───────────────────────────────────┘
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Try Ancestor 2: /acme/global-site/content/page          │
-│  Status: 200 ✓                                            │
+│  Try Ancestor 2: /acme/global-site/content/page         │
+│  Status: 200 ✓                                         │
 └─────────────────────────────────────────────────────────┘
 ```
 
