@@ -107,8 +107,6 @@ The base-to-satellite mapping is managed in the DA config UI at `da.live/config#
 - **satellite**: The satellite (live copy) site repo name (empty for the base entry itself)
 - **title**: A human-readable label
 
-> **Terminology note:** [Adobe's public MSM documentation](https://docs.da.live/about/early-access/multi-site-manager) describes this same relationship using the terms **source** and **linked** instead of **base** and **satellite**, with a sheet whose columns are named `source` / `linked` / `title`. This worker's code reads the sheet using the **base** / **satellite** column names — if your org's `msm` sheet was created with `source` / `linked` headers instead, the mapping won't resolve. Make sure your sheet's columns are named `base` and `satellite`.
-
 A row's `base` can itself appear as a `satellite` in another row (as `na-region` does above), which is what forms a multi-level chain: `store-1 → na-region → global-site`. The worker walks the full chain, up to a fixed maximum depth, with cycle detection to guard against misconfigured loops.
 
 The worker fetches this config from the DA admin API and caches it in memory (5-minute TTL).
