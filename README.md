@@ -27,7 +27,7 @@ This Cloudflare Worker replicates the MSM inheritance behavior for Edge Delivery
 3. **Looking up the MSM config** from the DA admin API to resolve the full chain of ancestor (base) sites
 4. **Inheriting from the ancestor chain on 404**, walking up through each base in order until one resolves
 5. **Merging redirects across the whole ancestor chain** (closer sites win on duplicate keys)
-6. **Preserving request context** (headers, query parameters, and authentication) on the direct satellite request
+6. **Preserving request context** (headers, query parameters, and authentication) on the direct satellite request. The worker holds no credentials of its own — see [Authentication](#authentication).
 7. **Caching resolved responses at the edge** for repeat requests (see [Response Caching](#response-caching))
 
 ### Request Flow
@@ -67,30 +67,30 @@ This Cloudflare Worker replicates the MSM inheritance behavior for Edge Delivery
 
 All ancestors in the chain are probed **in parallel**, and the first ok response found (nearest to the satellite) is returned. The chain is capped at a fixed maximum depth with cycle detection, so a misconfigured loop (e.g. A → B → A) can't cause infinite lookups.
 
-### Example content source configuration
+### Pointing a site at the worker
 
-The current recommended way to point a satellite site at this worker is to configure it as an Edge Delivery **Content Provider** (per [Adobe's MSM documentation](https://docs.da.live/about/early-access/multi-site-manager)):
+Set the worker as the site's content source through the configuration service (per [Adobe's MSM documentation](https://docs.da.live/about/early-access/multi-site-manager)):
 
 ```json
-// /sites/{site}.json
-{
-  "content": {
-    "source": {
-      "url": "https://da-msm.your-domain.workers.dev/{org}/{site}/",
-      "type": "markup"
-    }
+PUT https://admin.hlx.page/config/{org}/sites/{site}.json
+
+"content": {
+  "source": {
+    "type": "markup",
+    "url": "https://da-msm.your-domain.workers.dev/{org}/{site}/"
   }
 }
 ```
 
-Sites that still rely on `fstab.yaml` (read from `main`) can use the equivalent `mountpoints` entry instead:
+A site's content source is immutable once bound — an in-place `PUT` returns
+`409`, so moving an existing site means `DELETE` then `PUT`, which mints a new
+`contentBusId` and empties the content bus. Re-publish afterwards.
 
-```yaml
-mountpoints:
-  /: https://da-msm.your-domain.workers.dev/acme/store-1
-```
-
-`fstab.yaml` is no longer required for new sites — see the [FAQ](https://www.aem.live/docs/faq#what-is-fstabyaml).
+> Older setups mounted the worker with an `fstab.yaml` mountpoint
+> (`mountpoints: { /: https://…/acme/store-1 }`). That still appears in some
+> examples below; the configuration service above is the current route —
+> `fstab.yaml` is no longer required for new sites (see the
+> [FAQ](https://www.aem.live/docs/faq#what-is-fstabyaml)).
 
 ### MSM Config Setup
 
@@ -118,6 +118,55 @@ The worker fetches this config from the DA admin API and caches it in memory (5-
 3. **Satellite Content Request**: The worker requests the satellite content from DA
 4. **Content Overridden**: If the content has been overridden in the satellite, this content is sent back to Edge Delivery
 5. **Inherit from the Ancestor Chain**: If the content has not been overridden (satellite returns 404), the worker resolves the satellite's full ancestor chain from the MSM config and probes every ancestor in parallel, returning content from the nearest ancestor that resolves
+
+> Inheritance resolves when **admin fetches the content**, not at delivery. An
+> inherited page still needs its own `preview` / `live` call on the satellite
+> before visitors can see it — publishing a base page does not publish it across
+> satellites on its own. With many satellites, that is one call per satellite per
+> path.
+
+### Authentication
+
+The worker holds no credentials. It copies the incoming request's headers
+through to `CONTENT_ORIGIN` and `ADMIN_ORIGIN`, so **DA sees whatever the caller
+sent** — and DA is not anonymously readable, so a request that arrives without
+credentials comes back `401`.
+
+When the AEM admin fetches content on your behalf, it does **not** forward the
+`Authorization` header you sent it. That header authenticates you *to admin*.
+Admin forwards **`x-content-source-authorization`**, and presents it to the
+content source as `Authorization`.
+
+So every `preview` / `live` call against a site behind this worker needs both:
+
+```bash
+curl -X POST "https://admin.hlx.page/preview/{org}/{site}/main/{path}" \
+  -H "authorization: Bearer $TOKEN" \
+  -H "x-content-source-authorization: Bearer $TOKEN"
+```
+
+```js
+const headers = {
+  authorization: `Bearer ${TOKEN}`,                    // authenticates you to admin
+  'x-content-source-authorization': `Bearer ${TOKEN}`, // forwarded to the content source
+};
+```
+
+Sending both is harmless for a site that sits directly on `content.da.live`, so
+there is no need to branch on whether the worker is in the path.
+
+#### Troubleshooting
+
+If preview or publish returns `401` and the error names the worker:
+
+```
+[admin] Unable to fetch '/some/path.md' from 'html2md': (401) -
+not authenticated to access resource: https://da-msm.…workers.dev/{org}/{site}/some/path
+```
+
+…the credential never reached the worker. Add
+`x-content-source-authorization`. The worker is behaving correctly — it
+forwarded what it received, which was nothing.
 
 ### Redirect Inheritance
 
