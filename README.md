@@ -69,7 +69,7 @@ All ancestors in the chain are probed **in parallel**, and the first ok response
 
 ### Pointing a site at the worker
 
-Set the worker as the site's content source through the configuration service (per [Adobe's MSM documentation](https://docs.da.live/about/early-access/multi-site-manager)):
+Set the worker as the site's content source through the configuration service (per [Adobe's MSM documentation](https://www.aem.live/docs/ew/administering/multi-site-manager)):
 
 ```json
 PUT https://admin.hlx.page/config/{org}/sites/{site}.json
