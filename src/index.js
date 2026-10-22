@@ -19,7 +19,9 @@ async function getMsmMapping(org, headers, env) {
   const mapping = new Map();
   if (msmData) {
     for (const row of msmData) {
-      if (row.satellite) mapping.set(row.satellite, row.base);
+      const satellite = row.satellite ?? row.linked;
+      const base = row.base ?? row.source;
+      if (satellite) mapping.set(satellite, base);
     }
   }
   configCache.set(org, { mapping, ts: Date.now() });
