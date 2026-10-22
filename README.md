@@ -96,6 +96,8 @@ A site's content source is immutable once bound — an in-place `PUT` returns
 
 The base-to-satellite mapping is managed in the DA config UI at `da.live/config#/{org}/` under the **msm** tab. The sheet has three columns:
 
+`source` / `linked` are also supported aliases for `base` / `satellite`, matching the MSM app. Rows can mix naming schemes; `base` / `satellite` take precedence when non-null.
+
 | base | satellite | title |
 |---|---|---|
 | global-site | | Global Site (base) |
