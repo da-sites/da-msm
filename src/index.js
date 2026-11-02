@@ -96,7 +96,23 @@ function withDefaultCacheControl(response) {
   });
 }
 
-function maybeCache(ctx, cache, request, response) {
+function withImageAuth(response, env) {
+  const contentType = response.headers.get('Content-Type') || '';
+  if (!response.ok || contentType.split(';')[0].trim().toLowerCase() !== 'text/html') {
+    return response;
+  }
+
+  const headers = new Headers(response.headers);
+  headers.set('x-html2md-img-src', new URL(env.CONTENT_ORIGIN).hostname);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function maybeCache(ctx, cache, request, upstreamResponse, env) {
+  const response = withImageAuth(upstreamResponse, env);
   if (!isCacheable(request, response)) return response;
   const cacheable = withDefaultCacheControl(response.clone());
   ctx.waitUntil(cache.put(request, cacheable));
@@ -113,7 +129,7 @@ export default {
     const cache = caches.default;
     if (request.method === 'GET') {
       const cached = await cache.match(request);
-      if (cached) return cached;
+      if (cached) return withImageAuth(cached, env);
     }
 
     // Parse path: /org/site/rest/of/path
@@ -161,7 +177,7 @@ export default {
               'Cache-Control': `public, max-age=${RESOLVED_CACHE_TTL}`,
             },
           });
-          return maybeCache(ctx, cache, request, mergedResponse);
+          return maybeCache(ctx, cache, request, mergedResponse, env);
         }
       }
     }
@@ -170,7 +186,7 @@ export default {
     const satelliteResponse = await fetch(satelliteUrl, fetchOpts);
 
     if (satelliteResponse.status !== 404) {
-      return maybeCache(ctx, cache, request, satelliteResponse);
+      return maybeCache(ctx, cache, request, satelliteResponse, env);
     }
 
     if (!ancestors.length) return satelliteResponse;
@@ -191,6 +207,6 @@ export default {
     });
 
     if (winnerIdx === -1) return satelliteResponse;
-    return maybeCache(ctx, cache, request, probeResults[winnerIdx]);
+    return maybeCache(ctx, cache, request, probeResults[winnerIdx], env);
   },
 };
