@@ -10,6 +10,11 @@ ADMIN_ORIGIN = "https://admin.da.live"
 CONTENT_ORIGIN = "https://stage-content.da.live"
 ADMIN_ORIGIN = "https://stage-admin.da.live"
 
+# MSM locations prototype: deploys as a separate worker (da-msm-locations).
+[env.locations.vars]
+CONTENT_ORIGIN = "https://content.da.live"
+ADMIN_ORIGIN = "https://admin.da.live"
+
 [observability]
 [observability.logs]
 enabled = true

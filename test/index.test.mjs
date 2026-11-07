@@ -74,6 +74,9 @@ for (const [index, { name, rows, ancestors }] of cases.entries()) {
     const requests = [];
     t.mock.method(globalThis, 'fetch', async (url) => {
       requests.push(url);
+      if (url === `${adminOrigin}/config/${org}/satellite`) {
+        return new Response('Not found', { status: 404 });
+      }
       if (url === `${adminOrigin}/config/${org}/`) {
         return Response.json({ msm: { data: rows } });
       }
@@ -94,6 +97,7 @@ for (const [index, { name, rows, ancestors }] of cases.entries()) {
     assert.equal(response.status, ancestors.length ? 200 : 404);
     assert.equal(await response.text(), ancestors.length ? `Content from ${ancestors[0]}` : 'Not found');
     assert.deepEqual(requests, [
+      `${adminOrigin}/config/${org}/satellite`,
       `${adminOrigin}/config/${org}/`,
       `${contentOrigin}/${org}/satellite/page`,
       ...ancestors.map((site) => `${contentOrigin}/${org}/${site}/page`),

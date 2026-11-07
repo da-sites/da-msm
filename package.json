@@ -6,7 +6,8 @@
     "test": "node --test",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "deploy:stage": "wrangler deploy --env stage"
+    "deploy:stage": "wrangler deploy --env stage",
+    "deploy:locations": "wrangler deploy --env locations"
   },
   "devDependencies": {
     "wrangler": "^4.131.2"

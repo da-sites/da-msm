@@ -113,6 +113,21 @@ A row's `base` can itself appear as a `satellite` in another row (as `na-region`
 
 The worker fetches this config from the DA admin API and caches it in memory (5-minute TTL).
 
+### Locations Mode
+
+If a site's DA config (`da.live/config#/{org}/{site}`) has a **locations** sheet, it replaces the org `msm` sheet for that site.
+
+| path | source | missingPages |
+|---|---|---|
+| /global | | none |
+| /en-us | /global | linked |
+| /bestbuy | gamebox:/en-us | linked |
+
+- A page belongs to its deepest location; its source is the same relative path in `source` (`site:/path`, `/path` = same site, empty = `/`).
+- On 404, resolve from the source if `missingPages` is `linked` or `/.da/loc{path}/index.json` has `pending[<page>].linked: true`; repeat (max 5 hops, cycle-safe).
+- Redirects merge across all sites reachable via `source` (closer wins).
+- Other columns (`language`, `label`, `level`, `actions`, `conflictBehavior`, `onComplete`) are ignored by the worker.
+
 ### How It Works
 
 1. **Author Preview Request**: An author sends a preview request to Edge Delivery for a satellite page
@@ -265,6 +280,7 @@ The worker supports multiple environments via Wrangler, each targeting a differe
 |---|---|---|---|
 | Production (default) | `content.da.live` | `admin.da.live` | `da-msm` |
 | Stage | `stage-content.da.live` | `stage-admin.da.live` | `da-msm-stage` |
+| Locations (prototype) | `content.da.live` | `admin.da.live` | `da-msm-locations` |
 
 Configuration in `wrangler.toml`:
 
@@ -303,6 +319,9 @@ npm run deploy
 
 # Deploy stage worker
 npm run deploy:stage
+
+# Deploy locations prototype worker
+npm run deploy:locations
 ```
 
 After deployment, the endpoints will be:
