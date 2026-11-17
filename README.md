@@ -157,6 +157,26 @@ const headers = {
 Sending both is harmless for a site that sits directly on `content.da.live`, so
 there is no need to branch on whether the worker is in the path.
 
+#### DA-hosted images
+
+EDS downloads images into the media bus during preview. By default, BYOM only
+forwards content-source authorization to images on the content source's own
+host. The worker and DA image URLs use different hosts, so successful HTML
+responses include:
+
+```http
+x-html2md-img-src: content.da.live
+```
+
+The host is derived from `CONTENT_ORIGIN`, so stage responses instead allow
+`stage-content.da.live`. This also applies to cached HTML and detached pages.
+Only the configured DA content host is allowed, not arbitrary external image
+hosts. The preview request must still supply `x-content-source-authorization`.
+See [BYOM image authentication](https://www.aem.live/developer/byom#image-authentication-for-byom-content-sources).
+
+After deploying this change, preview and publish affected satellite pages again
+to re-ingest images previously rendered as `about:error`.
+
 #### Troubleshooting
 
 If preview or publish returns `401` and the error names the worker:
